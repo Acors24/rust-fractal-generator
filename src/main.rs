@@ -3,6 +3,10 @@ use std::{
     ops::{self, Add, Div, Mul, Sub},
 };
 
+use std::fs::File;
+use std::io::BufWriter;
+use std::path::Path;
+
 struct Image {
     width: usize,
     height: usize,
@@ -11,18 +15,17 @@ struct Image {
 
 impl Image {
     fn new(width: usize, height: usize) -> Self {
+        let mut data = vec![0; width * height];
+        data.resize(width * height, 0);
         Self {
             width,
             height,
-            data: vec![0; width * height],
+            data
         }
     }
 
     fn set_color(&mut self, x: usize, y: usize, r: u8, g: u8, b: u8) {
-        assert!(
-            x < self.width,
-            "Tried setting a color in an invalid pixel."
-        );
+        assert!(x < self.width, "Tried setting a color in an invalid pixel.");
         assert!(
             y < self.height,
             "Tried setting a color in an invalid pixel."
@@ -32,18 +35,35 @@ impl Image {
     }
 
     fn save(&self, filename: &str) {
-        let mut output = format!("P3\n#fractal output\n{} {}\n255\n", self.width, self.height);
-        for y in 0..self.height {
-            for x in 0..self.width {
-                let pixel = self.data[y * self.width + x];
-                let r: u8 = (pixel >> 16) as u8;
-                let g: u8 = (pixel >> 8) as u8;
-                let b: u8 = pixel as u8;
-                output.push_str(format!("{r} {g} {b}\n").as_str());
-            }
-        }
+        let filename = if filename.ends_with(".png") {
+            filename.to_string()
+        } else {
+            format!("{filename}.png")
+        };
+        let path = Path::new(filename.as_str());
+        let file = File::create(path).unwrap();
+        let ref mut w = BufWriter::new(file);
 
-        std::fs::write(format!("{filename}.ppm"), output).expect("Unable to write.");
+        let mut encoder = png::Encoder::new(w, self.width as u32, self.height as u32);
+        encoder.set_color(png::ColorType::Rgb);
+        encoder.set_depth(png::BitDepth::Eight);
+        encoder.set_source_gamma(png::ScaledFloat::from_scaled(45455)); // 1.0 / 2.2, scaled by 100000
+        let source_chromaticities = png::SourceChromaticities::new(
+            // Using unscaled instantiation here
+            (0.31270, 0.32900),
+            (0.64000, 0.33000),
+            (0.30000, 0.60000),
+            (0.15000, 0.06000),
+        );
+        encoder.set_source_chromaticities(source_chromaticities);
+        let mut writer = encoder.write_header().unwrap();
+
+        let split_data = self
+            .data
+            .iter()
+            .flat_map(|&i32| [(i32 >> 16) as u8, (i32 >> 8) as u8, i32 as u8])
+            .collect::<Vec<_>>();
+        writer.write_image_data(&split_data.as_slice()).unwrap(); // Save
     }
 }
 
@@ -145,10 +165,10 @@ fn generate(
         }
         print!("\r{}%", (100.0 * x as f64) as usize / width);
     }
-    print!("\rSaving to '{filename}'...");
-
+    
+    print!("\rSaving to '{filename}.png'...");
     img.save(filename);
-    println!("\rSaved to '{filename}'.   ");
+    println!("\rSaved to '{filename}.png'.   ");
 }
 
 // https://stackoverflow.com/a/5732390
@@ -158,7 +178,7 @@ fn map(v: f64, from_a: f64, from_b: f64, to_a: f64, to_b: f64) -> f64 {
 }
 
 fn main() {
-    generate(-2f64, 2f64, -2f64, 2f64, 1 << 10, 1 << 10, "test1");
+    generate(-2f64, 2f64, -2f64, 2f64, 1 << 10, 1 << 10, "output");
 }
 
 #[test]
@@ -169,7 +189,10 @@ fn test_image() {
     img.set_color(15, 50, 255, 0, 127);
 
     assert!(img.width == width, "THe width is different than expected.");
-    assert!(img.height == height, "The height is different than expected.");
+    assert!(
+        img.height == height,
+        "The height is different than expected."
+    );
     assert!(
         img.data[50 * width + 15] == 16711807,
         "A wrong color has been set."
